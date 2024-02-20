@@ -1,0 +1,66 @@
+# Node modules
+node_modules/
+
+# Deployment packages
+*.zip
+
+# Environment specific files
+.aws-sam/
+.env
+*.env
+*.env.local
+*.env.production
+*.env.development
+
+# Operating System generated files
+.DS_Store
+Thumbs.db
+
+# IDE/Editor directories
+.vscode/
+.idea/
+*.swp
+*~
+
+# Log files
+logs/
+*.log
+
+# Dependency directories
+jspm_packages/
+bower_components/
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# dotenv environment variables file
+.env
+
+# parcel-bundler cache (https://parceljs.org/)
+.cache
+.parcel-cache
+
+# Grunt intermediate storage (https://gruntjs.com/creating-plugins#storing-task-files)
+.grunt
+
+# Bower dependency directory (https://bower.io/)
+bower_components
+
+# temp directories
+tmp/
+temp/
+
+# Configuration files for local testing
+template.yaml

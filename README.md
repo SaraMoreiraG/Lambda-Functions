@@ -9,7 +9,7 @@
 
 Run the following command:
 
-### `run zip -r stripeLambda.zip . -x "routes/*"`
+### `zip -r stripeLambda.zip . -x "routes/*"`
 
 And upload the .zip file to Lambda
 

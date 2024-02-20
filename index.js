@@ -1,36 +1,38 @@
-// Importing necessary AWS SDK and Stripe modules
+// Import AWS SDK, Stripe and SendGrid modules
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const { DynamoDBDocumentClient, PutCommand } = require("@aws-sdk/lib-dynamodb");
-const { SESClient, SendEmailCommand } = require("@aws-sdk/client-ses");
 const Stripe = require("stripe");
+const sgMail = require("@sendgrid/mail");
 
 // Initialize Stripe with the secret key from environment variables
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-// Initialize SES client for the specific AWS region
-const sesClient = new SESClient({ region: "us-east-1" });
 
-// Initialize DynamoDB clients
+// Initialize SendGrid with API key from environment variables
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+
+// Initialize DynamoDB clients for the specified AWS region
 const dynamoDbClient = new DynamoDBClient({ region: "us-east-1" });
 const docClient = DynamoDBDocumentClient.from(dynamoDbClient);
 
-// Retrieve endpoint secret and table name from environment variables
+// Retrieve Stripe endpoint secret, table name, and company email from environment variables
 const endpointSecret = process.env.STRIPE_ENDPOINT_SECRET;
 const tableName = process.env.TABLE_NAME || "users";
 const companyEmail = process.env.COMPANY_EMAIL;
 
 exports.handler = async (event) => {
-  console.log("Received event:", event); // Debugging: log the received event
-  const sig = event.headers["Stripe-Signature"];
+  let stripeEvent;
 
   try {
-    // Assume the body is already in the correct format
-    const stripeEvent = stripe.webhooks.constructEvent(
+    // Verify Stripe signature to construct the event
+    stripeEvent = stripe.webhooks.constructEvent(
       event.body,
-      sig,
+      event.headers["Stripe-Signature"],
       endpointSecret
     );
-    console.log("Processed Stripe event:", stripeEvent.type); // Debugging: log the processed Stripe event
 
+    console.log("Processed Stripe event:", stripeEvent.type);
+
+    // Handle specific Stripe event types
     if (stripeEvent.type === "checkout.session.completed") {
       const session = stripeEvent.data.object;
 
@@ -50,9 +52,9 @@ exports.handler = async (event) => {
         nombreDelAlumno: customFields.nombredelalumno,
       };
 
-      console.log("User data to save:", userData); // Debugging: log user data
+      console.log("User data to save:", userData);
 
-      // Save to DynamoDB
+      // Save user data to DynamoDB
       await saveUserData(userData);
     }
 
@@ -71,11 +73,14 @@ exports.handler = async (event) => {
       hour12: false,
     });
 
-    // Send an email to yourself
+    // Send an email to yourself with error details
     await sendEmail({
-      to: companyEmail, // Use the company email from environment variables
-      subject: "Error Stripe WebHook",
-      body: `Check CloudWatch log group: /aws/lambda/addUsersSendEmail for what happened on: ${dateString}.\nThe error says: ${err.message}`,
+      to: companyEmail,
+      templateId: "d-58b12e8a1b6e47419f6b282c63360b6b",
+      dynamicData: {
+        errorDate: dateString,
+        errorMessage: err.message,
+      },
     });
 
     return {
@@ -85,8 +90,8 @@ exports.handler = async (event) => {
   }
 };
 
+// Function to save user data to DynamoDB
 async function saveUserData(userData) {
-  // Create a PutCommand instance with necessary parameters
   const command = new PutCommand({
     TableName: tableName,
     Item: userData,
@@ -96,52 +101,57 @@ async function saveUserData(userData) {
     await docClient.send(command);
     console.log("User data saved successfully.");
 
-    // Send an email to the user
+    // Send an email to User
     await sendEmail({
       to: userData.email,
-      subject:
-        "Enhorabuena, te has inscrito en el curso de IA Aplicada a las Artes Ecénicas",
-      body: `¡Hola ${userData.nombreDelAlumno}! Te has inscrito con éxito.`,
+      templateId: "d-d5482eab7c304461af455d8456e8521d",
+      dynamicData: {
+        userName: userData.nombreDelAlumno,
+        userEmail: userData.email,
+      },
     });
 
     // Send an email to yourself
     await sendEmail({
-      to: companyEmail, // Use the company email from environment variables
-      subject: "Tenemos un nuevo alumno",
-      body: `Nombre del alumno: ${userData.nombreDelAlumno} con el email: ${userData.email}`,
+      to: companyEmail,
+      templateId: "d-03d6e5f6f39f443ea1e4c51766896f05",
+      dynamicData: {
+        userName: userData.nombreDelAlumno,
+        userEmail: userData.email,
+      },
     });
   } catch (error) {
     console.error("Error saving user data in DynamoDB:", error);
 
     // Send an email to yourself
     await sendEmail({
-      to: companyEmail, // Use the company email from environment variables
-      subject: "Error Nuevo Alumno",
-      body: `El alumno: ${userData.nombreDelAlumno} \ncon el email: ${userData.email}, \nteléfono: ${userData.telefono} \ny que vive en: ${userData.ciudad}. \n Ha realizado el pago en Stripe pero sus datos no se han guardado en la base de datos.`,
+      to: companyEmail,
+      templateId: "d-d9e9e50b811e4970a74f91c446058f85",
+      dynamicData: {
+        userName: userData.nombreDelAlumno,
+        userEmail: userData.email,
+      },
     });
 
     throw new Error("Error saving user data.");
   }
 }
 
-async function sendEmail({ to, subject, body }) {
-  const params = {
-    Destination: { ToAddresses: [to] },
-    Message: {
-      Body: { Text: { Data: body } },
-      Subject: { Data: subject },
-    },
-    Source: companyEmail,
+// Function to send email with Send Grip
+async function sendEmail({ to, templateId, dynamicData }) {
+  const msg = {
+    to: to,
+    from: companyEmail,
+    templateId: templateId,
+    dynamic_template_data: dynamicData,
   };
 
-  // Create the command with the email parameters
-  const command = new SendEmailCommand(params);
-
   try {
-    // Send the email using the SES client
-    const result = await sesClient.send(command);
-    console.log("Email sent successfully", result);
+    console.log("Attempting to send email", msg);
+    await sgMail.send(msg);
+    console.log("Email sent successfully");
   } catch (error) {
-    console.log("Failed to send email:", error);
+    console.error("Failed to send email:", error);
+    throw error;
   }
 }
