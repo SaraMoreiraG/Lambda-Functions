@@ -1,6 +1,6 @@
 // Import AWS SDK, Stripe and SendGrid modules
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, PutCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, PutCommand, GetCommand, UpdateCommand } = require("@aws-sdk/lib-dynamodb");
 const Stripe = require("stripe");
 const sgMail = require("@sendgrid/mail");
 
@@ -37,19 +37,28 @@ exports.handler = async (event) => {
       const session = stripeEvent.data.object;
 
       // Process custom fields
-      const customFields = session.custom_fields
-        ? session.custom_fields.reduce((acc, field) => {
-            acc[field.key] = field[field.type].value;
-            return acc;
-          }, {})
-        : {};
+      // const customFields = session.custom_fields
+      //   ? session.custom_fields.reduce((acc, field) => {
+      //       acc[field.key] = field[field.type].value;
+      //       return acc;
+      //     }, {})
+      //   : {};
 
-      // Extract user data
+      // Extract metadata from the session, which contains course details
+      const courseData = {
+        courseId: session.metadata.courseId,
+        courseTitle: session.metadata.courseTitle,
+        courseImage: session.metadata.courseImage
+      };
+
+      // Extract user data and include courseData
       const userData = {
         email: session.customer_details.email,
-        telefono: customFields.telfono,
-        ciudad: customFields.ciudad,
-        nombreDelAlumno: customFields.nombredelalumno,
+        telefono: session.customer_details.phone,
+        direccion: [session.customer_details.address],
+        nombreDelAlumno: session.customer_details.name,
+        coursesID: [courseData],
+        admin: false
       };
 
       console.log("User data to save:", userData);
@@ -90,48 +99,79 @@ exports.handler = async (event) => {
   }
 };
 
-// Function to save user data to DynamoDB
+// Function to save or update user data in DynamoDB
 async function saveUserData(userData) {
-  const command = new PutCommand({
-    TableName: tableName,
-    Item: userData,
-  });
-
   try {
-    await docClient.send(command);
-    console.log("User data saved successfully.");
+    // Check if the user already exists in the database
+    const getUserCommand = new GetCommand({
+      TableName: tableName,
+      Key: { email: userData.email },
+    });
 
-    // Send an email to User
+    const { Item } = await docClient.send(getUserCommand);
+
+    if (Item) {
+      // If the user exists, update their record with the new course information
+      const updateCommand = new UpdateCommand({
+        TableName: tableName,
+        Key: { email: userData.email },
+        UpdateExpression: "SET coursesID = list_append(if_not_exists(coursesID, :empty_list), :course)",
+        ExpressionAttributeValues: {
+          ":course": [userData.coursesID[0]],
+          ":empty_list": [],
+        },
+      });
+
+      await docClient.send(updateCommand);
+      console.log("User course data updated successfully.");
+    } else {
+      // If the user does not exist, create a new record
+      const putCommand = new PutCommand({
+        TableName: tableName,
+        Item: userData,
+      });
+
+      await docClient.send(putCommand);
+      console.log("New user data saved successfully.");
+    }
+
+    // Send confirmation email to the user only if saved successfully
     await sendEmail({
       to: userData.email,
-      templateId: "d-d5482eab7c304461af455d8456e8521d",
+      templateId: "d-d5482eab7c304461af455d8456e8521d", // Your user confirmation template ID
       dynamicData: {
         userName: userData.nombreDelAlumno,
         userEmail: userData.email,
       },
     });
 
-    // Send an email to yourself
+    console.log("Confirmation email sent to user successfully");
+
+    // Send a notification email to the company about the new or updated user
     await sendEmail({
       to: companyEmail,
-      templateId: "d-03d6e5f6f39f443ea1e4c51766896f05",
+      templateId: "d-03d6e5f6f39f443ea1e4c51766896f05", // Your company notification template ID
       dynamicData: {
         userName: userData.nombreDelAlumno,
         userEmail: userData.email,
       },
     });
+
   } catch (error) {
     console.error("Error saving user data in DynamoDB:", error);
 
-    // Send an email to yourself
+    // Send an error email to the company
     await sendEmail({
       to: companyEmail,
-      templateId: "d-d9e9e50b811e4970a74f91c446058f85",
+      templateId: "d-d9e9e50b811e4970a74f91c446058f85", // Your error notification template ID
       dynamicData: {
-        userName: userData.nombreDelAlumno,
+        errorDate: new Date().toISOString(),
+        errorMessage: error.message,
         userEmail: userData.email,
       },
     });
+
+    console.log("Error notification email sent to company");
 
     throw new Error("Error saving user data.");
   }
